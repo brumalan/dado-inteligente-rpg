@@ -26,13 +26,16 @@ from typing import Literal, Optional
 from bson import ObjectId
 from bson.errors import InvalidId
 from fastapi import FastAPI, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from modelos import (
     FACES_POR_DADO,
     TIPOS_DE_DADO,
+    Atributos,
     Dispositivo,
+    ItemInventario,
     Personagem,
+    PontosVida,
     Rolagem,
     Sessao,
     conectar,
@@ -72,6 +75,49 @@ class SessaoEntrada(BaseModel):
     nome: str = Field(min_length=2, max_length=120, examples=["Sessao 3 - As Ruinas de Karendhal"])
     campanha: Optional[str] = Field(default=None, max_length=100, examples=["As Ruinas de Karendhal"])
     mestre: Optional[str] = Field(default=None, max_length=100, examples=["Alan"])
+
+
+class AtributosEntrada(BaseModel):
+    forca: int = Field(ge=1, le=20, examples=[12])
+    destreza: int = Field(ge=1, le=20, examples=[16])
+    constituicao: int = Field(ge=1, le=20, examples=[14])
+    inteligencia: int = Field(ge=1, le=20, examples=[10])
+    sabedoria: int = Field(ge=1, le=20, examples=[13])
+    carisma: int = Field(ge=1, le=20, examples=[8])
+
+
+class PontosVidaEntrada(BaseModel):
+    atual: int = Field(ge=0, examples=[28])
+    maximo: int = Field(ge=1, examples=[28])
+
+    @model_validator(mode="after")
+    def atual_nao_passa_do_maximo(self):
+        if self.atual > self.maximo:
+            raise ValueError("pontos de vida atuais nao podem passar do maximo")
+        return self
+
+
+class ItemEntrada(BaseModel):
+    item: str = Field(min_length=1, max_length=100, examples=["Espada curta"])
+    quantidade: int = Field(default=1, ge=1, examples=[1])
+
+
+class PersonagemEntrada(BaseModel):
+    """Ficha completa de um personagem novo."""
+
+    nome: str = Field(min_length=2, max_length=100, examples=["Kael Pedrafria"])
+    jogador: Optional[str] = Field(default=None, max_length=100, examples=["Brum"])
+    sistema: Optional[str] = Field(default=None, max_length=50, examples=["D&D 5e"])
+    campanha: Optional[str] = Field(default=None, max_length=100, examples=["As Ruinas de Karendhal"])
+    raca: Optional[str] = Field(default=None, max_length=50, examples=["Meio-orc"])
+    classe: Optional[str] = Field(default=None, max_length=50, examples=["Barbaro"])
+    nivel: int = Field(default=1, ge=1, le=20, examples=[3])
+    atributos: Optional[AtributosEntrada] = None
+    pontos_vida: Optional[PontosVidaEntrada] = None
+    inventario: list[ItemEntrada] = Field(default_factory=list)
+    pericias: list[str] = Field(default_factory=list, examples=[["Atletismo", "Sobrevivencia"]])
+    alinhamento: Optional[str] = Field(default=None, max_length=50, examples=["Caotico e Bom"])
+    vivo: bool = True
 
 
 class PersonagemAtualizacao(BaseModel):
@@ -123,6 +169,34 @@ def personagem_resumo(personagem: Personagem) -> dict:
         "nivel": personagem.nivel,
         "campanha": personagem.campanha,
     }
+
+
+def ficha_completa(personagem: Personagem) -> dict:
+    dados = personagem_resumo(personagem)
+    dados["raca"] = personagem.raca
+    dados["jogador"] = personagem.jogador
+    dados["sistema"] = personagem.sistema
+    dados["alinhamento"] = personagem.alinhamento
+    dados["vivo"] = personagem.vivo
+    dados["pericias"] = list(personagem.pericias)
+    if personagem.atributos:
+        dados["atributos"] = {
+            "forca": personagem.atributos.forca,
+            "destreza": personagem.atributos.destreza,
+            "constituicao": personagem.atributos.constituicao,
+            "inteligencia": personagem.atributos.inteligencia,
+            "sabedoria": personagem.atributos.sabedoria,
+            "carisma": personagem.atributos.carisma,
+        }
+    if personagem.pontos_vida:
+        dados["pontos_vida"] = {
+            "atual": personagem.pontos_vida.atual,
+            "maximo": personagem.pontos_vida.maximo,
+        }
+    dados["inventario"] = [
+        {"item": i.item, "quantidade": i.quantidade} for i in personagem.inventario
+    ]
+    return dados
 
 
 def sessao_resumo(sessao: Sessao) -> dict:
@@ -193,6 +267,30 @@ def estatisticas_de(consulta) -> dict:
 # PERSONAGENS - leitura e atualizacao da ficha (o cadastro veio da atividade anterior)
 # ==========================================================================
 
+@app.post("/personagens", status_code=201, tags=["Personagens"], summary="Cadastra um personagem novo")
+def criar_personagem(dados: PersonagemEntrada):
+    # nome repetido confunde o vinculo do dado e as estatisticas: nao aceita
+    if Personagem.objects(nome__iexact=dados.nome.strip()).first() is not None:
+        raise HTTPException(status_code=409, detail="Ja existe um personagem com o nome " + dados.nome)
+
+    personagem = Personagem(
+        nome=dados.nome.strip(),
+        jogador=dados.jogador,
+        sistema=dados.sistema,
+        campanha=dados.campanha,
+        raca=dados.raca,
+        classe=dados.classe,
+        nivel=dados.nivel,
+        atributos=Atributos(**dados.atributos.model_dump()) if dados.atributos else None,
+        pontos_vida=PontosVida(**dados.pontos_vida.model_dump()) if dados.pontos_vida else None,
+        inventario=[ItemInventario(item=i.item, quantidade=i.quantidade) for i in dados.inventario],
+        pericias=dados.pericias,
+        alinhamento=dados.alinhamento,
+        vivo=dados.vivo,
+    ).save()
+    return {"mensagem": "Personagem cadastrado", "personagem": ficha_completa(personagem)}
+
+
 @app.get("/personagens", tags=["Personagens"], summary="Lista os personagens")
 def listar_personagens():
     personagens = Personagem.objects.order_by("nome")
@@ -208,31 +306,7 @@ def obter_personagem(personagem_id: str):
     if personagem is None:
         raise HTTPException(status_code=404, detail="Personagem nao encontrado: " + personagem_id)
 
-    dados = personagem_resumo(personagem)
-    dados["raca"] = personagem.raca
-    dados["jogador"] = personagem.jogador
-    dados["sistema"] = personagem.sistema
-    dados["alinhamento"] = personagem.alinhamento
-    dados["vivo"] = personagem.vivo
-    dados["pericias"] = list(personagem.pericias)
-    if personagem.atributos:
-        dados["atributos"] = {
-            "forca": personagem.atributos.forca,
-            "destreza": personagem.atributos.destreza,
-            "constituicao": personagem.atributos.constituicao,
-            "inteligencia": personagem.atributos.inteligencia,
-            "sabedoria": personagem.atributos.sabedoria,
-            "carisma": personagem.atributos.carisma,
-        }
-    if personagem.pontos_vida:
-        dados["pontos_vida"] = {
-            "atual": personagem.pontos_vida.atual,
-            "maximo": personagem.pontos_vida.maximo,
-        }
-    dados["inventario"] = [
-        {"item": i.item, "quantidade": i.quantidade} for i in personagem.inventario
-    ]
-    return dados
+    return ficha_completa(personagem)
 
 
 @app.put("/personagens/{personagem_id}", tags=["Personagens"], summary="Atualiza a ficha (ex.: o jogador dono do personagem)")
