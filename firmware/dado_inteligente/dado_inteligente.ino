@@ -44,7 +44,7 @@ const char* WIFI_SENHA = "COLOQUE_A_SENHA";
 // Endereco da API. Na nuvem (Render) e https e funciona de qualquer rede
 // com internet. Para usar a API rodando num computador da mesma rede,
 // troque pelo IP dele, ex.: "http://192.168.0.100:8000".
-const char* API_BASE = "https://COLOQUE_O_ENDERECO.onrender.com";
+const char* API_BASE = "https://dado-inteligente-rpg.onrender.com";
 
 // o plano gratuito do Render hiberna a API e ela leva ate ~1 min para
 // acordar; por isso o tempo limite das requisicoes e longo
