@@ -74,6 +74,15 @@ class SessaoEntrada(BaseModel):
     mestre: Optional[str] = Field(default=None, max_length=100, examples=["Alan"])
 
 
+class PersonagemAtualizacao(BaseModel):
+    """Campos da ficha que podem ser alterados. So os enviados sao gravados."""
+
+    jogador: Optional[str] = Field(default=None, min_length=1, max_length=100, examples=["Brum"])
+    nivel: Optional[int] = Field(default=None, ge=1, le=20, examples=[6])
+    alinhamento: Optional[str] = Field(default=None, max_length=50, examples=["Neutra e Boa"])
+    vivo: Optional[bool] = Field(default=None, examples=[True])
+
+
 class VinculoEntrada(BaseModel):
     """Diz a qual personagem e sessao o dado fisico esta servindo."""
 
@@ -109,6 +118,7 @@ def personagem_resumo(personagem: Personagem) -> dict:
     return {
         "id": str(personagem.id),
         "nome": personagem.nome,
+        "jogador": personagem.jogador,
         "classe": personagem.classe,
         "nivel": personagem.nivel,
         "campanha": personagem.campanha,
@@ -180,7 +190,7 @@ def estatisticas_de(consulta) -> dict:
 
 
 # ==========================================================================
-# PERSONAGENS - leitura (o cadastro ja foi feito na atividade anterior)
+# PERSONAGENS - leitura e atualizacao da ficha (o cadastro veio da atividade anterior)
 # ==========================================================================
 
 @app.get("/personagens", tags=["Personagens"], summary="Lista os personagens")
@@ -223,6 +233,22 @@ def obter_personagem(personagem_id: str):
         {"item": i.item, "quantidade": i.quantidade} for i in personagem.inventario
     ]
     return dados
+
+
+@app.put("/personagens/{personagem_id}", tags=["Personagens"], summary="Atualiza a ficha (ex.: o jogador dono do personagem)")
+def atualizar_personagem(personagem_id: str, dados: PersonagemAtualizacao):
+    personagem = Personagem.objects(id=para_object_id(personagem_id, "personagem_id")).first()
+    if personagem is None:
+        raise HTTPException(status_code=404, detail="Personagem nao encontrado: " + personagem_id)
+
+    alteracoes = dados.model_dump(exclude_unset=True, exclude_none=True)
+    if not alteracoes:
+        raise HTTPException(status_code=422, detail="Informe ao menos um campo para alterar")
+
+    for campo, valor in alteracoes.items():
+        setattr(personagem, campo, valor)
+    personagem.save()
+    return {"mensagem": "Personagem atualizado", "alterados": list(alteracoes), "personagem": personagem_resumo(personagem)}
 
 
 @app.get(
